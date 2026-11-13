@@ -33,4 +33,23 @@ mkdir -p dist
 out="$ROOT/dist/skyrim-runtime-extender-$version.zip"
 rm -f "$out"
 (cd "$STAGE" && zip -q -r -X "$out" .)
+
+# MO2 takes an installed mod's version from <archive>.meta next to the archive, not from a meta.ini
+# inside it (installationmanager.cpp: it copies the download .meta over the bundled one). Same layout
+# as skyrim-workspace/tools/mod-release/release.py download_meta: MO2's key order, CRLF, version
+# padded to four parts. Install with "Install a new mod from an archive" on the zip in dist/, or
+# copy both files into MO2's downloads folder; dragging only the zip gives MO2's blank .meta.
+meta_version="$version"
+if [[ "$version" =~ ^[0-9]+(\.[0-9]+){0,3}$ ]]; then
+  IFS=. read -r -a parts <<< "$version"
+  while [ "${#parts[@]}" -lt 4 ]; do parts+=(0); done
+  meta_version="$(IFS=.; echo "${parts[*]:0:4}")"
+fi
+{
+  printf '%s\r\n' "[General]" "gameName=SkyrimSE" "modID=0" "modName=Skyrim Runtime Extender" \
+    "version=$meta_version" "newestVersion=$meta_version" "installed=false" "fileID=0" "url=" "name=" \
+    "description=" 'fileTime=@DateTime(\0\0\0\x10\0\x80\0\0\0\0\0\0\0\xff\xff\xff\xff\0)' \
+    "fileCategory=1" "category=39" "repository=" 'userData=@Variant(\0\0\0\b\0\0\0\0)' \
+    "author=" "uploader=" "uploaderUrl=" "uninstalled=false" "paused=false" "removed=false"
+} > "$out.meta"
 echo "$out"
