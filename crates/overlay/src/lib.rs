@@ -42,6 +42,7 @@ use skyrim::render::PresentFn;
 use windows::core::Interface;
 
 mod adapter;
+mod fontset;
 mod frame;
 mod hud;
 mod input;
@@ -422,44 +423,49 @@ fn fonts() -> Option<&'static (egui::FontDefinitions, String)> {
     FONTS.get_or_init(load_fonts).as_ref()
 }
 
-/// The game's Futura Condensed Light for proportional text and Futura Condensed for headings, each
-/// falling back on Segoe UI; Consolas for monospace, falling back on Segoe UI.
+/// The game's Futura Condensed Light for proportional text and Futura Condensed for headings; one
+/// sans-serif and one monospace font from the Windows font folder as fallbacks (Segoe UI and
+/// Consolas on Windows; Arial and Courier New in a typical Wine or `CrossOver` prefix). Each family
+/// falls back on the others, so none is empty while any font was read, and every file passes
+/// epaint's parser first ([`fontset`]).
 fn load_fonts() -> Option<(egui::FontDefinitions, String)> {
     let mut fonts = egui::FontDefinitions::empty();
-    if let Some(dir) = std::env::var_os("WINDIR").map(|w| std::path::PathBuf::from(w).join("Fonts")) {
-        for (name, file) in [("segoe", "segoeui.ttf"), ("consolas", "consola.ttf")] {
-            if let Ok(bytes) = std::fs::read(dir.join(file)) {
-                fonts.font_data.insert(name.to_owned(), egui::FontData::from_owned(bytes).into());
-            }
-        }
-    }
-    let source = match game_data().ok_or_else(|| "no game folder".to_owned()).and_then(|d| vanilla::load(&d)) {
+    let dir = std::env::var_os("WINDIR").map(|w| std::path::PathBuf::from(w).join("Fonts"));
+    let read = |file: &str| std::fs::read(dir.as_ref()?.join(file)).ok();
+    let mut add = |name: &str, bytes: Vec<u8>| {
+        fonts.font_data.insert(name.to_owned(), egui::FontData::from_owned(bytes).into());
+    };
+    let sans = fontset::first_valid(fontset::SANS, read, fontset::parses).map(|(name, file, bytes)| {
+        add(name, bytes);
+        (name, file)
+    });
+    let mono = fontset::first_valid(fontset::MONO, read, fontset::parses).map(|(name, file, bytes)| {
+        add(name, bytes);
+        (name, file)
+    });
+    let (game, game_source) = match game_data().ok_or_else(|| "no game folder".to_owned()).and_then(|d| vanilla::load(&d)) {
         Ok(v) => {
-            fonts.font_data.insert(vanilla::BODY.to_owned(), egui::FontData::from_owned(v.body).into());
-            fonts.font_data.insert(vanilla::HEADING.to_owned(), egui::FontData::from_owned(v.heading).into());
-            format!("{} from {}", vanilla::BODY, v.source)
+            let body = fontset::parses(&v.body).then(|| add(vanilla::BODY, v.body)).is_some();
+            let heading = fontset::parses(&v.heading).then(|| add(vanilla::HEADING, v.heading)).is_some();
+            let source = if body {
+                format!("{} from {}", vanilla::BODY, v.source)
+            } else {
+                format!("the game's font from {} did not parse", v.source)
+            };
+            ((body, heading), source)
         }
-        Err(e) => format!("Segoe UI, the game's font was not read: {e}"),
+        Err(e) => ((false, false), format!("the game's font was not read: {e}")),
     };
-    let order = |first: &str| -> Vec<String> {
-        let mut names: Vec<String> = Vec::new();
-        for name in [first, "segoe", "consolas"] {
-            if fonts.font_data.contains_key(name) && !names.iter().any(|n| n == name) {
-                names.push(name.to_owned());
-            }
-        }
-        names
-    };
-    let families = [
-        (egui::FontFamily::Proportional, order(vanilla::BODY)),
-        (egui::FontFamily::Name(theme::HEADING.into()), order(vanilla::HEADING)),
-        (egui::FontFamily::Monospace, order("consolas")),
-    ];
-    if families[0].1.is_empty() {
-        return None;
-    }
-    for (family, names) in families {
-        fonts.families.insert(family, names);
-    }
+    let [proportional, heading, monospace] = fontset::families(
+        game.0.then_some(vanilla::BODY),
+        game.1.then_some(vanilla::HEADING),
+        sans.map(|s| s.0),
+        mono.map(|m| m.0),
+    )?;
+    let file = |f: Option<(&'static str, &'static str)>| -> &'static str { f.map_or("none", |f| f.1) };
+    let source = format!("{game_source}; sans {}; monospace {}", file(sans), file(mono));
+    fonts.families.insert(egui::FontFamily::Proportional, proportional);
+    fonts.families.insert(egui::FontFamily::Name(theme::HEADING.into()), heading);
+    fonts.families.insert(egui::FontFamily::Monospace, monospace);
     Some((fonts, source))
 }

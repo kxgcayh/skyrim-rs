@@ -624,6 +624,7 @@ version = "0.1.0"
 dependencies = [
  "egui",
  "hook",
+ "skrifa",
  "skyrim",
  "skyrim-sre",
  "windows",
